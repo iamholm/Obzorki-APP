@@ -1,0 +1,20 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Local runtime data
+uii_data.db
+settings.json
+
+# Build artifacts
+build/
+dist/
+AutoObzorki_portable.zip
+.claude/
+
+# Local generated/output docs (may contain personal data)
+Обзорки/
+Список_extracted.xlsx
+СПИСОК 15 ОП СЕНТЯБРЬ 2025.docx
+СПИСОК 15 ОП СЕНТЯБРЬ 2025_СПИСОК.docx
+15 оп Дислокация новейшая 2025.docx
