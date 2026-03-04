@@ -306,6 +306,13 @@ _ADDR_PHONE = re.compile(
 )
 
 
+def normalize_address_line(text: str) -> str:
+    """Приводит адрес к одной строке: без переносов и лишних пробелов."""
+    if not text:
+        return ''
+    return re.sub(r'\s+', ' ', str(text).replace('\r', ' ').replace('\n', ' ')).strip()
+
+
 def normalize_address(text: str) -> str:
     """Нормализует адрес: убирает мусор (РФ, телефоны, гражданство, патроним, Инвалид)."""
     if not text:
@@ -343,7 +350,7 @@ def normalize_address(text: str) -> str:
     text = _ADDR_SPB.sub('г. Санкт-Петербург', text)
     # 7. Убрать патроним в начале («Толегенович г. Санкт-Петербург...»)
     text = re.sub(r'^[А-ЯЁ][а-яё]+(?:ович|евич|овна|евна)\s+', '', text)
-    return text.strip()
+    return normalize_address_line(text)
 
 
 def normalize_record(rec: dict) -> dict:
@@ -355,8 +362,7 @@ def normalize_record(rec: dict) -> dict:
         rec['Обязанности'] = normalize_duties(rec['Обязанности'])
     if rec.get('Суд (когда, кем)'):
         rec['Суд (когда, кем)'] = normalize_court(rec['Суд (когда, кем)'])
-    if rec.get('Место жительства'):
-        rec['Место жительства'] = normalize_address(rec['Место жительства'])
+    rec['Место жительства'] = normalize_address(rec.get('Место жительства', ''))
     return rec
 
 
@@ -388,7 +394,7 @@ def _rec(category, date, num_ld, fio_raw, dob, addr_raw, court, duties, end, not
         '№ л/д':            num_ld,
         'ФИО':              re.sub(r'\s+', ' ', fio).strip(),
         'Дата рождения':    dob,
-        'Место жительства': addr,
+        'Место жительства': normalize_address_line(addr),
         'Суд (когда, кем)': court,
         'Обязанности':      duties,
         'Окончание срока':  end,

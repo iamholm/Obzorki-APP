@@ -60,12 +60,15 @@ CHAR_TEXTS = {
 
 CONN_TEXTS = {
     'положительная': (
-        'Поддерживает социально-полезные связи с родственниками, '
-        'ведёт законопослушный образ жизни.'
+        'Имеются сведения об отсутствии связей с лицами, ранее судимыми.'
     ),
-    'нейтральная': 'Поддерживает связи с родственниками.',
-    'отрицательная': 'Поддерживает связи с лицами, ведущими антиобщественный образ жизни.',
+    'нейтральная': 'Сведений об отсутсвии связей с ранее судимыми не имеются.',
+    'отрицательная': 'Имеются сведения о связях с лицами, ранее судимыми.',
 }
+
+FEATURES_TEXT = 'Особых примет не выявлено.'
+SEASON_CLOTHES_TEXT = 'Одет по сезону.'
+IC_CHECK_TEXT = 'См. справку ИБД-Р'
 
 QUARTER_ACC   = {1: 'первый', 2: 'второй', 3: 'третий', 4: 'четвёртый'}
 CHAR_OPTIONS  = ['положительная', 'нейтральная', 'отрицательная']
@@ -304,10 +307,11 @@ def _set_para_text(para, text: str):
 
 # ── Генерация одной справки ────────────────────────────────────────────────────
 
-def _pick_char_template(char_type: str) -> str:
-    raw = CHAR_TEXTS.get(char_type)
+def _pick_char_template(char_type: str, char_templates: dict = None) -> str:
+    source = char_templates if isinstance(char_templates, dict) else CHAR_TEXTS
+    raw = source.get(char_type)
     if raw is None:
-        raw = CHAR_TEXTS.get('нейтральная', '')
+        raw = source.get('нейтральная', '')
     if isinstance(raw, str):
         return raw
     if isinstance(raw, (list, tuple)):
@@ -318,7 +322,8 @@ def _pick_char_template(char_type: str) -> str:
 
 
 def generate_one(rec: dict, char_type: str, quarter: int, year: int,
-                 out_dir: str, officer: dict = None, custom_char_text: str = "") -> str:
+                 out_dir: str, officer: dict = None, custom_char_text: str = "",
+                 char_templates: dict = None) -> str:
     doc    = Document(TEMPLATE_FILE)
     tables = doc.tables
 
@@ -328,6 +333,14 @@ def generate_one(rec: dict, char_type: str, quarter: int, year: int,
     duties   = rec.get('Обязанности', '').strip()
     end_date = rec.get('Окончание срока', '').strip()
     address  = rec.get('Место жительства', '').strip()
+    work     = rec.get('Место работы (учебы)', '').strip()
+    phone    = rec.get('Телефон', '').strip()
+    manual_char_text = (rec.get('Характеристика') or rec.get('Характеристика (п.8)', '')).strip()
+    manual_links_text = (rec.get('Связи') or rec.get('Связи (п.9)', '')).strip()
+    manual_features_text = (rec.get('Приметы') or rec.get('Приметы (п.10)', '')).strip()
+    manual_season_text = (rec.get('Сезонная одежда') or rec.get('Сезонная одежда (п.11)', '')).strip()
+    manual_violations_text = (rec.get('Нарушения') or rec.get('Нарушения (п.12)', '')).strip()
+    manual_ic_check_text = (rec.get('Проверка ИЦ') or rec.get('Проверка ИЦ (п.13)', '')).strip()
 
     # User-editable template selected randomly per document.
     custom_char_text = (custom_char_text or '').strip()
@@ -336,8 +349,17 @@ def generate_one(rec: dict, char_type: str, quarter: int, year: int,
         conn_text = CONN_TEXTS.get('нейтральная', '')
     else:
         safe_char = char_type if char_type in CHAR_OPTIONS else 'нейтральная'
-        char_text = _pick_char_template(safe_char)
+        char_text = _pick_char_template(safe_char, char_templates=char_templates)
         conn_text = CONN_TEXTS.get(safe_char, CONN_TEXTS.get('нейтральная', ''))
+
+    if manual_char_text:
+        char_text = manual_char_text
+    if manual_links_text:
+        conn_text = manual_links_text
+    features_text = manual_features_text or FEATURES_TEXT
+    season_text = manual_season_text or SEASON_CLOTHES_TEXT
+    violations_text = manual_violations_text
+    ic_check_text = manual_ic_check_text or IC_CHECK_TEXT
 
     def safe_t(idx):
         return tables[idx] if idx < len(tables) else None
@@ -366,6 +388,14 @@ def generate_one(rec: dict, char_type: str, quarter: int, year: int,
             if len(uc) > col:
                 _set_cell_text(uc[col], [duties, end_date, address][t_idx - 2])
 
+    t5 = safe_t(5)
+    if t5 and t5.rows:
+        uc = _unique_cells(t5.rows[0])
+        if len(uc) > 1:
+            _set_cell_text(uc[1], work)
+        if len(uc) > 3:
+            _set_cell_text(uc[3], phone)
+
     t6 = safe_t(6)
     if t6 and len(t6.rows) > 2:
         uc = _unique_cells(t6.rows[2])
@@ -375,8 +405,30 @@ def generate_one(rec: dict, char_type: str, quarter: int, year: int,
     if t7 and t7.rows:
         uc = _unique_cells(t7.rows[0])
         if len(uc) > 1: _set_cell_text(uc[1], conn_text)
+        if len(t7.rows) > 1:
+            uc = _unique_cells(t7.rows[1])
+            if len(uc) > 1:
+                _set_cell_text(uc[1], features_text)
 
-    new_period = f'(за {QUARTER_ACC[quarter]} квартал {year} года)'
+    t8 = safe_t(8)
+    if t8 and t8.rows:
+        uc = _unique_cells(t8.rows[0])
+        if len(uc) > 1:
+            _set_cell_text(uc[1], season_text)
+
+    t9 = safe_t(9)
+    if t9 and t9.rows:
+        uc = _unique_cells(t9.rows[0])
+        if len(uc) > 1:
+            _set_cell_text(uc[1], violations_text)
+
+    t10 = safe_t(10)
+    if t10 and t10.rows:
+        uc = _unique_cells(t10.rows[0])
+        if len(uc) > 1:
+            _set_cell_text(uc[1], ic_check_text)
+
+    new_period = f'(за {quarter} квартал {year} года)'
     for para in doc.paragraphs:
         if 'квартал' in para.text.lower():
             _set_para_text(para, new_period)

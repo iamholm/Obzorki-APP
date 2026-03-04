@@ -5,7 +5,7 @@ a = Analysis(
     ['app_uii.py'],
     pathex=[],
     binaries=[],
-    datas=[('Test.docx', '.')],
+    datas=[('Test.docx', '.'), ('autoobzorki.ico', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -21,7 +21,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='AutoObzorki',
+    name='\u0410\u0432\u0442\u043e\u041e\u0431\u0437\u043e\u0440\u043a\u0438',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -32,6 +32,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='autoobzorki.ico',
 )
 coll = COLLECT(
     exe,
@@ -40,5 +41,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='AutoObzorki',
+    name='\u0410\u0432\u0442\u043e\u041e\u0431\u0437\u043e\u0440\u043a\u0438',
 )

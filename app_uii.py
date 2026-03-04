@@ -8,6 +8,8 @@ import sys
 import json
 import datetime
 import threading
+import time as pytime
+import ctypes
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QTabWidget,
@@ -16,10 +18,13 @@ from PySide6.QtWidgets import (
     QSpinBox, QComboBox, QTableWidget, QTableWidgetItem,
     QHeaderView, QProgressBar, QFrame, QTextEdit, QScrollArea,
     QAbstractItemView, QMessageBox, QDialog, QAbstractSpinBox,
-    QStyleOptionButton, QStyle, QSizePolicy, QInputDialog,
+    QStyleOptionButton, QStyle, QSizePolicy, QInputDialog, QSplashScreen,
 )
-from PySide6.QtCore import Qt, Signal, QObject, QRect
-from PySide6.QtGui import QFont, QColor, QPalette, QShortcut, QKeySequence
+from PySide6.QtCore import Qt, Signal, QObject, QRect, QTimer
+from PySide6.QtGui import (
+    QFont, QColor, QPalette, QShortcut, QKeySequence,
+    QIcon, QPixmap, QPainter, QLinearGradient, QPen, QPainterPath, QRegion,
+)
 
 import extract_uii as uii
 import db
@@ -29,6 +34,16 @@ import gen_obzorka as g
 # ── Настройки приложения ───────────────────────────────────────────────────────
 
 _SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'settings.json')
+APP_ICON_CANDIDATES = (
+    "autoobzorki.ico",
+    "app.ico",
+    "icon.ico",
+    "favicon.ico",
+    "autoobzorki.png",
+    "icon.png",
+    "favicon-32x32.png",
+    "favicon-16x16.png",
+)
 
 
 def _load_settings() -> dict:
@@ -45,6 +60,217 @@ def _save_settings(data: dict):
             json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
+
+
+def _app_base_dir() -> str:
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def _app_search_dirs() -> list[str]:
+    dirs: list[str] = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if isinstance(meipass, str) and meipass:
+        dirs.append(os.path.abspath(meipass))
+    base = _app_base_dir()
+    dirs.append(base)
+    internal = os.path.join(base, "_internal")
+    if os.path.isdir(internal):
+        dirs.append(internal)
+    local = os.path.dirname(os.path.abspath(__file__))
+    dirs.append(local)
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for d in dirs:
+        key = os.path.normcase(os.path.abspath(d))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(os.path.abspath(d))
+    return out
+
+
+def _resolve_app_icon_path() -> str | None:
+    for base in _app_search_dirs():
+        for name in APP_ICON_CANDIDATES:
+            path = os.path.join(base, name)
+            if os.path.isfile(path):
+                return path
+    return None
+
+
+def _load_app_icon() -> QIcon | None:
+    path = _resolve_app_icon_path()
+    if not path:
+        return None
+    icon = QIcon(path)
+    if icon.isNull():
+        return None
+    return icon
+
+
+def _build_splash_pixmap(progress: float = 0.0) -> QPixmap:
+    width, height = 520, 286
+    radius = 16
+    p = max(0.0, min(1.0, float(progress)))
+
+    pix = QPixmap(width, height)
+    pix.fill(Qt.GlobalColor.transparent)
+
+    painter = QPainter(pix)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+    clip = QPainterPath()
+    clip.addRoundedRect(0.5, 0.5, width - 1, height - 1, radius, radius)
+    painter.setClipPath(clip)
+
+    bg = QLinearGradient(0, 0, width, height)
+    bg.setColorAt(0.0, QColor("#1a2f5c"))
+    bg.setColorAt(0.45, QColor("#0f1d36"))
+    bg.setColorAt(1.0, QColor("#0a1221"))
+    painter.fillRect(0, 0, width, height, bg)
+
+    glow = QLinearGradient(0, 0, width, 0)
+    glow.setColorAt(0.0, QColor(255, 255, 255, 34))
+    glow.setColorAt(1.0, QColor(255, 255, 255, 0))
+    painter.fillRect(0, 0, width, 6, glow)
+
+    painter.setClipping(False)
+    painter.setPen(QPen(QColor(255, 255, 255, 52), 1))
+    painter.setBrush(QColor(255, 255, 255, 16))
+    painter.drawRoundedRect(0.5, 0.5, width - 1, height - 1, radius, radius)
+
+    logo_x, logo_y = 24, 22
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QColor("#4f86ff"))
+    painter.drawRoundedRect(logo_x, logo_y, 66, 66, 14, 14)
+    painter.setPen(QColor("white"))
+    logo_font = QFont("Segoe UI", 20)
+    logo_font.setBold(True)
+    painter.setFont(logo_font)
+    painter.drawText(logo_x, logo_y, 66, 66, int(Qt.AlignmentFlag.AlignCenter), "АО")
+
+    title_x = logo_x + 82
+    painter.setPen(QColor("white"))
+    title_font = QFont("Segoe UI", 24)
+    title_font.setBold(True)
+    painter.setFont(title_font)
+    painter.drawText(
+        title_x,
+        logo_y + 4,
+        width - (title_x + 24),
+        36,
+        int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+        "АвтоОбзорки",
+    )
+
+    painter.setFont(QFont("Segoe UI", 11))
+    painter.setPen(QColor("#d9e6ff"))
+    painter.drawText(
+        title_x,
+        logo_y + 39,
+        width - (title_x + 24),
+        20,
+        int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+        f"Версия {APP_VERSION}",
+    )
+
+    painter.setFont(QFont("Segoe UI", 10))
+    painter.setPen(QColor("#b9cae8"))
+    painter.drawText(
+        24,
+        logo_y + 84,
+        width - 48,
+        22,
+        int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+        "Генератор обзорных справок",
+    )
+
+    status_y = height - 58
+    painter.setFont(QFont("Segoe UI", 9))
+    painter.setPen(QColor("#9db4d8"))
+    painter.drawText(24, status_y, 220, 20, int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), "Инициализация")
+    painter.drawText(width - 70, status_y, 46, 20, int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter), f"{int(p * 100)}%")
+
+    bar_x, bar_y = 24, height - 32
+    bar_w, bar_h = width - 48, 10
+    painter.setPen(QPen(QColor(255, 255, 255, 40), 1))
+    painter.setBrush(QColor(8, 15, 30, 150))
+    painter.drawRoundedRect(bar_x, bar_y, bar_w, bar_h, 5, 5)
+
+    fill_w = int((bar_w - 2) * p)
+    if fill_w > 0:
+        fill = QLinearGradient(bar_x, 0, bar_x + bar_w, 0)
+        fill.setColorAt(0.0, QColor("#72c1ff"))
+        fill.setColorAt(1.0, QColor("#5f7cff"))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(fill)
+        painter.drawRoundedRect(bar_x + 1, bar_y + 1, fill_w, bar_h - 2, 4, 4)
+
+    painter.end()
+    return pix
+
+
+def _apply_splash_shape(splash: QSplashScreen, radius: int = 16) -> None:
+    pix = splash.pixmap()
+    if pix.isNull():
+        return
+    path = QPainterPath()
+    path.addRoundedRect(0.0, 0.0, float(pix.width()), float(pix.height()), float(radius), float(radius))
+    splash.setMask(QRegion(path.toFillPolygon().toPolygon()))
+
+
+def _show_startup_splash(app: QApplication, app_icon: QIcon | None = None) -> QSplashScreen:
+    splash = QSplashScreen(_build_splash_pixmap(0.0))
+    splash.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+    splash.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
+    splash.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+    if app_icon is not None:
+        splash.setWindowIcon(app_icon)
+    _apply_splash_shape(splash)
+    splash.show()
+
+    screen = app.primaryScreen()
+    if screen is not None:
+        center = screen.availableGeometry().center()
+        rect = splash.frameGeometry()
+        rect.moveCenter(center)
+        splash.move(rect.topLeft())
+    app.processEvents()
+    return splash
+
+
+def _finish_startup_splash(
+    app: QApplication,
+    splash: QSplashScreen,
+    started_at: float,
+    minimum_seconds: float = 1.0,
+) -> None:
+    while True:
+        elapsed = pytime.monotonic() - started_at
+        progress = min(1.0, elapsed / minimum_seconds)
+        splash.setPixmap(_build_splash_pixmap(progress))
+        _apply_splash_shape(splash)
+        app.processEvents()
+        if elapsed >= minimum_seconds:
+            break
+        pytime.sleep(0.03)
+
+
+def _to_bool(value, default=False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in ("1", "true", "yes", "on", "dark", "темная", "тёмная"):
+            return True
+        if v in ("0", "false", "no", "off", "light", "светлая"):
+            return False
+    return bool(default)
 
 
 _DEFAULT_CHAR_TEMPLATES = {
@@ -84,6 +310,62 @@ def _norm_char_templates(raw) -> dict:
     return templates
 
 
+def _norm_officer_char_templates(raw) -> dict:
+    """Нормализует персональные шаблоны: {officer_id: {char_type: [texts]}}."""
+    result = {}
+    if not isinstance(raw, dict):
+        return result
+    for officer_id, templates in raw.items():
+        try:
+            off_id = int(officer_id)
+        except Exception:
+            continue
+        if not isinstance(templates, dict):
+            continue
+        by_type = {}
+        for key in g.CHAR_OPTIONS:
+            value = templates.get(key)
+            items = []
+            if isinstance(value, str):
+                text = _clean_template_text(value)
+                if text:
+                    items.append(text)
+            elif isinstance(value, (list, tuple)):
+                for item in value:
+                    if isinstance(item, str):
+                        text = _clean_template_text(item)
+                        if text:
+                            items.append(text)
+            if items:
+                by_type[key] = items
+        if by_type:
+            result[off_id] = by_type
+    return result
+
+
+def _effective_char_templates(base_templates: dict, officer_templates: dict = None) -> dict:
+    """Сливает глобальные и персональные шаблоны (персональные имеют приоритет)."""
+    merged = _norm_char_templates(base_templates)
+    if not isinstance(officer_templates, dict):
+        return merged
+    for key in g.CHAR_OPTIONS:
+        raw = officer_templates.get(key)
+        items = []
+        if isinstance(raw, str):
+            text = _clean_template_text(raw)
+            if text:
+                items.append(text)
+        elif isinstance(raw, (list, tuple)):
+            for item in raw:
+                if isinstance(item, str):
+                    text = _clean_template_text(item)
+                    if text:
+                        items.append(text)
+        if items:
+            merged[key] = items
+    return merged
+
+
 def _get_char_templates(settings: dict = None) -> dict:
     s = settings if isinstance(settings, dict) else _load_settings()
     return _norm_char_templates(s.get('char_templates'))
@@ -100,8 +382,15 @@ def _default_template_for(char_type: str) -> str:
     return defaults[0] if defaults else "По месту жительства характеризуется удовлетворительно."
 
 
+def _normalize_person_address(text: str) -> str:
+    return uii.normalize_address_line(text or "")
+
+
+def _normalize_inline_text(text: str) -> str:
+    return " ".join(str(text or "").replace("\r", " ").replace("\n", " ").split()).strip()
+
 # ── Константы ──────────────────────────────────────────────────────────────────
-APP_VERSION    = "3.0"
+APP_VERSION    = "3.1"
 DEFAULT_SOURCE = ""
 NO_OFFICER     = "— (не выбран)"
 BASE_OUT_DIR   = "Обзорки"
@@ -281,10 +570,9 @@ class _FixUnmatchedDialog(QDialog):
             dob = QTableWidgetItem(rec.get('Дата рождения', ''))
             dob.setFlags(Qt.ItemFlag.ItemIsEnabled)
             self._tbl.setItem(i, 2, dob)
-
-            addr_src = (rec.get('Место жительства', '') or '').replace('\n', ' ').strip()
+            addr_src = _normalize_person_address(rec.get('Место жительства', '') or '')
             addr = QTableWidgetItem(addr_src)
-            addr.setToolTip(rec.get('Место жительства', '') or '')
+            addr.setToolTip(addr_src)
             addr.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsEditable | Qt.ItemFlag.ItemIsSelectable)
             self._tbl.setItem(i, 3, addr)
 
@@ -304,8 +592,155 @@ class _FixUnmatchedDialog(QDialog):
         result = []
         for i in range(self._tbl.rowCount()):
             item = self._tbl.item(i, 3)
-            result.append((item.text().strip() if item else "").strip())
+            result.append(_normalize_person_address(item.text() if item else ""))
         return result
+
+
+class _PersonCardDialog(QDialog):
+    """Редактирование карточки подучётного (поля, идущие в итоговый docx)."""
+
+    def __init__(self, rec: dict, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Карточка подучётного")
+        self.resize(860, 860)
+        rec = rec or {}
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(12, 12, 12, 12)
+        root.setSpacing(8)
+
+        hint = QLabel(
+            "Изменения применяются только после подтверждения.\n"
+            "Редактируются поля, которые используются при генерации справки."
+        )
+        hint.setObjectName("status")
+        hint.setWordWrap(True)
+        root.addWidget(hint)
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(6)
+        root.addLayout(grid)
+
+        r = 0
+        grid.addWidget(QLabel("ФИО:"), r, 0)
+        self._fio = QLineEdit(_normalize_inline_text(rec.get("ФИО", "")))
+        grid.addWidget(self._fio, r, 1)
+        r += 1
+
+        grid.addWidget(QLabel("Дата рождения:"), r, 0)
+        self._dob = QLineEdit(_normalize_inline_text(rec.get("Дата рождения", "")))
+        self._dob.setPlaceholderText("ДД.ММ.ГГГГ")
+        grid.addWidget(self._dob, r, 1)
+        r += 1
+
+        grid.addWidget(QLabel("Место жительства:"), r, 0, alignment=Qt.AlignmentFlag.AlignTop)
+        self._address = QTextEdit()
+        self._address.setFixedHeight(66)
+        self._address.setPlainText(_normalize_person_address(rec.get("Место жительства", "")))
+        grid.addWidget(self._address, r, 1)
+        r += 1
+
+        grid.addWidget(QLabel("Суд (когда, кем):"), r, 0, alignment=Qt.AlignmentFlag.AlignTop)
+        self._court = QTextEdit()
+        self._court.setFixedHeight(86)
+        self._court.setPlainText(_normalize_inline_text(rec.get("Суд (когда, кем)", "")))
+        grid.addWidget(self._court, r, 1)
+        r += 1
+
+        grid.addWidget(QLabel("Обязанности:"), r, 0, alignment=Qt.AlignmentFlag.AlignTop)
+        self._duties = QTextEdit()
+        self._duties.setFixedHeight(86)
+        self._duties.setPlainText(_normalize_inline_text(rec.get("Обязанности", "")))
+        grid.addWidget(self._duties, r, 1)
+        r += 1
+
+        grid.addWidget(QLabel("Окончание срока:"), r, 0)
+        self._end_date = QLineEdit(_normalize_inline_text(rec.get("Окончание срока", "")))
+        self._end_date.setPlaceholderText("ДД.ММ.ГГГГ")
+        grid.addWidget(self._end_date, r, 1)
+        r += 1
+
+        grid.addWidget(QLabel("Место работы (учебы):"), r, 0)
+        self._work_place = QLineEdit(_normalize_inline_text(rec.get("Место работы (учебы)", "")))
+        grid.addWidget(self._work_place, r, 1)
+        r += 1
+
+        grid.addWidget(QLabel("Телефон:"), r, 0)
+        self._phone = QLineEdit(_normalize_inline_text(rec.get("Телефон", "")))
+        grid.addWidget(self._phone, r, 1)
+        r += 1
+
+        grid.addWidget(QLabel("Характеристика:"), r, 0, alignment=Qt.AlignmentFlag.AlignTop)
+        self._char_text = QTextEdit()
+        self._char_text.setFixedHeight(96)
+        self._char_text.setPlainText(
+            _normalize_inline_text(rec.get("Характеристика", rec.get("Характеристика (п.8)", "")))
+        )
+        grid.addWidget(self._char_text, r, 1)
+        r += 1
+
+        grid.addWidget(QLabel("Связи:"), r, 0, alignment=Qt.AlignmentFlag.AlignTop)
+        self._links = QTextEdit()
+        self._links.setFixedHeight(66)
+        self._links.setPlainText(_normalize_inline_text(rec.get("Связи", rec.get("Связи (п.9)", ""))))
+        grid.addWidget(self._links, r, 1)
+        r += 1
+
+        grid.addWidget(QLabel("Приметы:"), r, 0)
+        self._features = QLineEdit(_normalize_inline_text(rec.get("Приметы", rec.get("Приметы (п.10)", ""))))
+        grid.addWidget(self._features, r, 1)
+        r += 1
+
+        grid.addWidget(QLabel("Сезонная одежда:"), r, 0)
+        self._season = QLineEdit(
+            _normalize_inline_text(rec.get("Сезонная одежда", rec.get("Сезонная одежда (п.11)", "")))
+        )
+        grid.addWidget(self._season, r, 1)
+        r += 1
+
+        grid.addWidget(QLabel("Нарушения:"), r, 0, alignment=Qt.AlignmentFlag.AlignTop)
+        self._violations = QTextEdit()
+        self._violations.setFixedHeight(66)
+        self._violations.setPlainText(_normalize_inline_text(rec.get("Нарушения", rec.get("Нарушения (п.12)", ""))))
+        grid.addWidget(self._violations, r, 1)
+        r += 1
+
+        grid.addWidget(QLabel("Проверка ИЦ:"), r, 0)
+        self._ic_check = QLineEdit(_normalize_inline_text(rec.get("Проверка ИЦ", rec.get("Проверка ИЦ (п.13)", ""))))
+        grid.addWidget(self._ic_check, r, 1)
+        r += 1
+
+        grid.setRowStretch(r, 1)
+        grid.setColumnStretch(1, 1)
+
+        btns = QHBoxLayout()
+        btns.addStretch()
+        b_cancel = _flat_btn("Отмена")
+        b_cancel.clicked.connect(self.reject)
+        btns.addWidget(b_cancel)
+        b_save = QPushButton("  Сохранить  ")
+        b_save.clicked.connect(self.accept)
+        btns.addWidget(b_save)
+        root.addLayout(btns)
+
+    def get_data(self) -> dict:
+        return {
+            "ФИО": _normalize_inline_text(self._fio.text()),
+            "Дата рождения": _normalize_inline_text(self._dob.text()),
+            "Место жительства": _normalize_person_address(self._address.toPlainText()),
+            "Суд (когда, кем)": _normalize_inline_text(self._court.toPlainText()),
+            "Обязанности": _normalize_inline_text(self._duties.toPlainText()),
+            "Окончание срока": _normalize_inline_text(self._end_date.text()),
+            "Место работы (учебы)": _normalize_inline_text(self._work_place.text()),
+            "Телефон": _normalize_inline_text(self._phone.text()),
+            "Характеристика": _normalize_inline_text(self._char_text.toPlainText()),
+            "Связи": _normalize_inline_text(self._links.toPlainText()),
+            "Приметы": _normalize_inline_text(self._features.text()),
+            "Сезонная одежда": _normalize_inline_text(self._season.text()),
+            "Нарушения": _normalize_inline_text(self._violations.toPlainText()),
+            "Проверка ИЦ": _normalize_inline_text(self._ic_check.text()),
+        }
 
 
 # ── Диалог настроек ─────────────────────────────────────────────────────────────
@@ -313,12 +748,26 @@ class _FixUnmatchedDialog(QDialog):
 class _SettingsDialog(QDialog):
     """Параметры интерфейса и шаблонов характеристик."""
 
-    def __init__(self, dark_theme: bool, char_templates: dict, parent=None):
+    _GLOBAL_SCOPE_TEXT = "Общие (по умолчанию)"
+
+    def __init__(
+        self,
+        dark_theme: bool,
+        char_templates: dict,
+        officers: list = None,
+        officer_char_templates: dict = None,
+        parent=None,
+    ):
         super().__init__(parent)
         self.setWindowTitle("Настройки")
         self.resize(900, 680)
 
-        self._templates = _norm_char_templates(char_templates)
+        self._global_templates = _norm_char_templates(char_templates)
+        self._officers = [
+            o for o in (officers or [])
+            if isinstance(o, dict) and o.get('id') is not None
+        ]
+        self._officer_templates = _norm_officer_char_templates(officer_char_templates)
         self._syncing = False
         self._current_type = g.CHAR_OPTIONS[0]
         self._template_row_widgets = []
@@ -345,6 +794,20 @@ class _SettingsDialog(QDialog):
         hint.setObjectName("status")
         hint.setWordWrap(True)
         p_layout.addWidget(hint)
+
+        scope_row = QHBoxLayout()
+        scope_row.setSpacing(8)
+        scope_row.addWidget(QLabel("Набор шаблонов:"))
+        self._scope_cb = QComboBox()
+        self._scope_cb.setFixedWidth(360)
+        self._scope_cb.addItem(self._GLOBAL_SCOPE_TEXT, None)
+        for officer in self._officers:
+            off_id = int(officer.get('id'))
+            self._scope_cb.addItem(g._officer_label(officer), off_id)
+        self._scope_cb.currentIndexChanged.connect(lambda _idx: self._on_scope_changed())
+        scope_row.addWidget(self._scope_cb)
+        scope_row.addStretch()
+        p_layout.addLayout(scope_row)
 
         type_row = QHBoxLayout()
         type_row.setSpacing(8)
@@ -410,12 +873,33 @@ class _SettingsDialog(QDialog):
         btns.addWidget(b_save)
         root.addLayout(btns)
 
+    def _current_scope_officer_id(self):
+        if not hasattr(self, "_scope_cb"):
+            return None
+        data = self._scope_cb.currentData()
+        if data is None:
+            return None
+        try:
+            return int(data)
+        except Exception:
+            return None
+
     def _templates_for_current_type(self) -> list:
-        templates = self._templates.get(self._current_type)
+        off_id = self._current_scope_officer_id()
+        if off_id is None:
+            templates = self._global_templates.get(self._current_type)
+            if not templates:
+                templates = [_default_template_for(self._current_type)]
+                self._global_templates[self._current_type] = list(templates)
+            return list(templates)
+
+        off_templates = self._officer_templates.get(off_id, {})
+        templates = off_templates.get(self._current_type)
         if not templates:
-            templates = [_default_template_for(self._current_type)]
-            self._templates[self._current_type] = templates
-        return templates
+            templates = self._global_templates.get(self._current_type) or [
+                _default_template_for(self._current_type)
+            ]
+        return list(templates)
 
     def _clear_templates_ui(self):
         for w in self._template_row_widgets:
@@ -459,13 +943,34 @@ class _SettingsDialog(QDialog):
                 texts.append(text)
         if not texts:
             texts = [_default_template_for(self._current_type)]
-        self._templates[self._current_type] = texts
+
+        off_id = self._current_scope_officer_id()
+        if off_id is None:
+            self._global_templates[self._current_type] = list(texts)
+            return
+
+        base = self._global_templates.get(self._current_type) or [_default_template_for(self._current_type)]
+        if texts == base:
+            by_type = self._officer_templates.get(off_id)
+            if by_type:
+                by_type.pop(self._current_type, None)
+                if not any(by_type.get(k) for k in g.CHAR_OPTIONS):
+                    self._officer_templates.pop(off_id, None)
+            return
+
+        self._officer_templates.setdefault(off_id, {})[self._current_type] = list(texts)
 
     def _render_templates(self):
         templates = self._templates_for_current_type()
         self._clear_templates_ui()
         for i, text in enumerate(templates):
             self._add_template_row_widget(i, text)
+
+    def _on_scope_changed(self):
+        if self._syncing:
+            return
+        self._commit_current_rows()
+        self._render_templates()
 
     def _on_char_type_changed(self, char_type: str):
         if char_type not in g.CHAR_OPTIONS or self._syncing:
@@ -478,7 +983,11 @@ class _SettingsDialog(QDialog):
         self._commit_current_rows()
         templates = self._templates_for_current_type()
         templates.append("")
-        self._templates[self._current_type] = templates
+        off_id = self._current_scope_officer_id()
+        if off_id is None:
+            self._global_templates[self._current_type] = list(templates)
+        else:
+            self._officer_templates.setdefault(off_id, {})[self._current_type] = list(templates)
         self._render_templates()
         if self._template_edits:
             self._template_edits[-1].setFocus()
@@ -495,7 +1004,15 @@ class _SettingsDialog(QDialog):
         self._render_templates()
 
     def _reset_templates(self):
-        self._templates = _norm_char_templates({})
+        off_id = self._current_scope_officer_id()
+        if off_id is None:
+            self._global_templates = _norm_char_templates({})
+        else:
+            by_type = self._officer_templates.get(off_id)
+            if by_type:
+                by_type.pop(self._current_type, None)
+                if not any(by_type.get(k) for k in g.CHAR_OPTIONS):
+                    self._officer_templates.pop(off_id, None)
         self._current_type = self._char_type_cb.currentText() or g.CHAR_OPTIONS[0]
         self._render_templates()
 
@@ -504,7 +1021,11 @@ class _SettingsDialog(QDialog):
 
     def get_templates(self) -> dict:
         self._commit_current_rows()
-        return _norm_char_templates(self._templates)
+        return _norm_char_templates(self._global_templates)
+
+    def get_officer_templates(self) -> dict:
+        self._commit_current_rows()
+        return _norm_officer_char_templates(self._officer_templates)
 
 
 # ── Сигналы для потоков ────────────────────────────────────────────────────────
@@ -603,12 +1124,14 @@ class ObzorkiTab(QWidget):
     C_CHK  = 0
     C_NUM  = 1
     C_FIO  = 2
-    C_CAT  = 3
-    C_CHAR_POS = 4
-    C_CHAR_NEU = 5
-    C_CHAR_NEG = 6
-    C_CHAR_CUS = 7
-    C_OFF  = 8
+    C_DOB  = 3
+    C_CAT  = 4
+    C_CHAR_POS = 5
+    C_CHAR_NEU = 6
+    C_CHAR_NEG = 7
+    C_CHAR_CUS = 8
+    C_OFF  = 9
+    C_ADDR = 10
 
     def __init__(self, on_open_settings=None):
         super().__init__()
@@ -633,12 +1156,12 @@ class ObzorkiTab(QWidget):
         self._last_loaded_source = ""
         self._shortcuts: list = []
         self._last_char_click_row = -1
+        self._startup_autoload_done = False
 
         db.init_db()
         self._build()
         self._restore_ui_settings()
         self.reload_officers()
-        self._autoload_last_source()
         self._update_generate_enabled()
 
     # ── Построение UI ─────────────────────────────────────────────────────────
@@ -708,9 +1231,9 @@ class ObzorkiTab(QWidget):
         root.addLayout(ctrl)
 
         # ─ Таблица подучётных ─────────────────────────────────────────────────
-        self._table = QTableWidget(0, 9)
+        self._table = QTableWidget(0, 11)
         self._table.setHorizontalHeaderLabels(
-            ['', '№', 'ФИО', 'Кат.', '+', '0', '-', 'Инд.', 'Участковый'])
+            ['', '№', 'ФИО', 'Дата рожд.', 'Кат.', '+', '0', '-', 'Инд.', 'Участковый', 'Адрес'])
         chk_header = _CheckHeaderView(self.C_CHK, self._table)
         self._table.setHorizontalHeader(chk_header)
         chk_header.toggled.connect(self._set_all_checks)
@@ -725,37 +1248,38 @@ class ObzorkiTab(QWidget):
         self._table.itemDoubleClicked.connect(self._on_records_table_item_double_clicked)
 
         hdr = self._table.horizontalHeader()
-        for col in (self.C_CHK, self.C_NUM, self.C_FIO,
+        for col in (self.C_CHK, self.C_NUM, self.C_FIO, self.C_DOB,
                     self.C_CAT, self.C_CHAR_POS, self.C_CHAR_NEU, self.C_CHAR_NEG,
-                    self.C_CHAR_CUS, self.C_OFF):
+                    self.C_CHAR_CUS, self.C_OFF, self.C_ADDR):
             hdr.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
         hdr.setStretchLastSection(False)
         self._table.setColumnWidth(self.C_CHK,  30)
         self._table.setColumnWidth(self.C_NUM,  38)
         self._table.setColumnWidth(self.C_FIO,  200)
+        self._table.setColumnWidth(self.C_DOB,  98)
         self._table.setColumnWidth(self.C_CAT,  75)
         self._table.setColumnWidth(self.C_CHAR_POS, 48)
         self._table.setColumnWidth(self.C_CHAR_NEU, 48)
         self._table.setColumnWidth(self.C_CHAR_NEG, 48)
         self._table.setColumnWidth(self.C_CHAR_CUS, 58)
         self._table.setColumnWidth(self.C_OFF,  320)
+        self._table.setColumnWidth(self.C_ADDR, 90)
 
         root.addWidget(self._table, stretch=1)
 
         # ─ Статус + генерация ─────────────────────────────────────────────────
         bot = QHBoxLayout()
-        self._status = QLabel("Нет данных")
+        self._status = QLabel("")
         self._status.setObjectName("status")
-        bot.addWidget(self._status)
+        self._status.setVisible(False)
 
-        bot.addSpacing(8)
         self._unmatched_info = QLabel("")
         self._unmatched_info.setStyleSheet("color: #cf222e;")
         bot.addWidget(self._unmatched_info)
 
-        bot.addSpacing(12)
-        self._last_source_info = QLabel("Последний загруженный список: —")
+        self._last_source_info = QLabel("")
         self._last_source_info.setObjectName("status")
+        bot.addSpacing(12)
         bot.addWidget(self._last_source_info, stretch=1)
 
         self._prog = QProgressBar()
@@ -768,7 +1292,8 @@ class ObzorkiTab(QWidget):
         right_ctrl = QHBoxLayout()
         right_ctrl.setSpacing(4)
         right_ctrl.setContentsMargins(0, 0, 0, 0)
-        right_ctrl.addWidget(QLabel("Квартал:"))
+        self._quarter_lbl = QLabel("Квартал:")
+        right_ctrl.addWidget(self._quarter_lbl)
         self._quarter = QSpinBox()
         self._quarter.setRange(1, 4)
         self._quarter.setValue(1)
@@ -780,7 +1305,8 @@ class ObzorkiTab(QWidget):
         right_ctrl.addWidget(self._quarter)
 
         right_ctrl.addSpacing(2)
-        right_ctrl.addWidget(QLabel("Год:"))
+        self._year_lbl = QLabel("Год:")
+        right_ctrl.addWidget(self._year_lbl)
         self._year = QSpinBox()
         self._year.setRange(2020, 2050)
         self._year.setValue(datetime.date.today().year)
@@ -848,6 +1374,12 @@ class ObzorkiTab(QWidget):
             return
         _set_status(self._status, "Последний список не найден. Выберите файл заново.", "info")
 
+    def run_startup_autoload(self):
+        if self._startup_autoload_done:
+            return
+        self._startup_autoload_done = True
+        self._autoload_last_source()
+
     def _set_unmatched_info(self, count: int):
         if not hasattr(self, "_unmatched_info"):
             return
@@ -888,6 +1420,14 @@ class ObzorkiTab(QWidget):
     def _is_edit_locked(self) -> bool:
         return bool(self._edit_lock_all_officers)
 
+    def _warn_edit_locked(self):
+        QMessageBox.information(
+            self,
+            "Редактирование заблокировано",
+            "Чтобы изменить данные, выберите конкретного участкового в фильтре,\n"
+            "а не режим «Все участковые».",
+        )
+
     def _set_row_edit_enabled(self, row: int, enabled: bool):
         for col in self._char_cols():
             it = self._table.item(row, col)
@@ -900,6 +1440,9 @@ class ObzorkiTab(QWidget):
         off_cb = self._table.cellWidget(row, self.C_OFF)
         if isinstance(off_cb, QComboBox):
             off_cb.setEnabled(enabled)
+        addr_btn = self._table.cellWidget(row, self.C_ADDR)
+        if isinstance(addr_btn, QPushButton):
+            addr_btn.setEnabled(enabled)
 
     def _update_edit_mode_lock(self):
         locked = False
@@ -1069,18 +1612,332 @@ class ObzorkiTab(QWidget):
     def _on_records_table_item_double_clicked(self, item: QTableWidgetItem):
         if not item:
             return
-        if self._is_edit_locked():
-            return
-        if item.column() != self.C_CHAR_CUS:
-            return
         row = item.row()
-        current_type, current_text = self._char_type_for_row(row)
-        seed_text = current_text if current_type == CUSTOM_CHAR_OPTION else ""
-        new_text = self._edit_custom_characteristic(row, seed_text)
-        if not new_text:
+        col = item.column()
+
+        if self._is_edit_locked():
+            self._warn_edit_locked()
             return
-        self._set_row_char_type(row, CUSTOM_CHAR_OPTION, new_text, persist=True)
-        _set_status(self._status, "Индивидуальная характеристика сохранена", "ok")
+
+        if col == self.C_CHAR_CUS:
+            current_type, current_text = self._char_type_for_row(row)
+            seed_text = current_text if current_type == CUSTOM_CHAR_OPTION else ""
+            new_text = self._edit_custom_characteristic(row, seed_text)
+            if not new_text:
+                return
+            self._set_row_char_type(row, CUSTOM_CHAR_OPTION, new_text, persist=True)
+            _set_status(self._status, "Индивидуальная характеристика сохранена", "ok")
+            return
+
+        if col in (self.C_CHK, self.C_CHAR_POS, self.C_CHAR_NEU, self.C_CHAR_NEG):
+            return
+
+        self._edit_row_person_card(row)
+
+    def _effective_char_text_for_row(self, row: int) -> str:
+        if row < 0 or row >= len(self._records):
+            return ""
+        rec = self._records[row]
+        char_type, custom_text = self._char_type_for_row(row)
+        if char_type == CUSTOM_CHAR_OPTION and custom_text:
+            return _normalize_inline_text(custom_text)
+
+        # Явно сохранённый текст (legacy/ручной) имеет приоритет.
+        manual = _normalize_inline_text(rec.get("Характеристика", rec.get("Характеристика (п.8)", "")))
+        if manual:
+            return manual
+
+        safe_char = char_type if char_type in g.CHAR_OPTIONS else "нейтральная"
+        base_templates = _norm_char_templates(g.CHAR_TEXTS)
+
+        off_cb = self._table.cellWidget(row, self.C_OFF)
+        off_label = off_cb.currentText() if isinstance(off_cb, QComboBox) else NO_OFFICER
+        officer = self._resolve_generation_officer(self._off_map.get(off_label))
+        if isinstance(officer, dict):
+            try:
+                off_id = int(officer.get("id"))
+            except Exception:
+                off_id = None
+            if off_id is not None:
+                per_off = _norm_officer_char_templates(db.all_officer_char_templates()).get(off_id)
+                base_templates = _effective_char_templates(base_templates, per_off)
+
+        values = base_templates.get(safe_char) or []
+        if values:
+            return _normalize_inline_text(values[0])
+        return _normalize_inline_text(_default_template_for(safe_char))
+
+    def _effective_links_text_for_row(self, row: int) -> str:
+        if row < 0 or row >= len(self._records):
+            return ""
+        rec = self._records[row]
+        manual = _normalize_inline_text(rec.get("Связи", rec.get("Связи (п.9)", "")))
+        if manual:
+            return manual
+        char_type, _custom = self._char_type_for_row(row)
+        safe_char = char_type if char_type in g.CHAR_OPTIONS else "нейтральная"
+        return _normalize_inline_text(g.CONN_TEXTS.get(safe_char, g.CONN_TEXTS.get("нейтральная", "")))
+
+    def _edit_row_person_card(self, row: int):
+        if self._is_edit_locked():
+            self._warn_edit_locked()
+            return
+        if row < 0 or row >= len(self._records):
+            return
+        rec = self._records[row]
+        key_fio, key_dob = self._record_source_key(rec)
+        if not key_fio:
+            return
+
+        old_char_text = self._effective_char_text_for_row(row)
+        old_links_text = self._effective_links_text_for_row(row)
+
+        old_data = {
+            "ФИО": _normalize_inline_text(rec.get("ФИО", "")),
+            "Дата рождения": _normalize_inline_text(rec.get("Дата рождения", "")),
+            "Место жительства": _normalize_person_address(rec.get("Место жительства", "")),
+            "Суд (когда, кем)": _normalize_inline_text(rec.get("Суд (когда, кем)", "")),
+            "Обязанности": _normalize_inline_text(rec.get("Обязанности", "")),
+            "Окончание срока": _normalize_inline_text(rec.get("Окончание срока", "")),
+            "Место работы (учебы)": _normalize_inline_text(rec.get("Место работы (учебы)", "")),
+            "Телефон": _normalize_inline_text(rec.get("Телефон", "")),
+            "Характеристика": old_char_text,
+            "Связи": old_links_text,
+            "Приметы": _normalize_inline_text(rec.get("Приметы", rec.get("Приметы (п.10)", ""))),
+            "Сезонная одежда": _normalize_inline_text(
+                rec.get("Сезонная одежда", rec.get("Сезонная одежда (п.11)", ""))
+            ),
+            "Нарушения": _normalize_inline_text(rec.get("Нарушения", rec.get("Нарушения (п.12)", ""))),
+            "Проверка ИЦ": _normalize_inline_text(rec.get("Проверка ИЦ", rec.get("Проверка ИЦ (п.13)", ""))),
+        }
+
+        dlg = _PersonCardDialog(old_data, self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        new_data = dlg.get_data()
+        if not new_data.get("ФИО"):
+            QMessageBox.warning(self, "Пустое ФИО", "ФИО не может быть пустым.")
+            return
+
+        changed_fields = [
+            fld for fld in old_data.keys()
+            if _normalize_inline_text(old_data.get(fld, "")) != _normalize_inline_text(new_data.get(fld, ""))
+        ]
+        if not changed_fields:
+            return
+
+        confirm_msg = (
+            "Применить изменения в карточке?\n\n"
+            f"Изменено полей: {len(changed_fields)}\n"
+            f"{', '.join(changed_fields)}"
+        )
+        r = QMessageBox.question(
+            self,
+            "Подтверждение изменений",
+            confirm_msg,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if r != QMessageBox.StandardButton.Yes:
+            return
+
+        # ФИО и адрес сохраняются отдельными override-таблицами.
+        db.set_person_fio_override(key_fio, key_dob, new_data.get("ФИО", ""))
+        db.set_person_address_fix(key_fio, key_dob, new_data.get("Место жительства", ""))
+
+        source = {
+            "dob": _normalize_inline_text(rec.get("_source_dob", key_dob)),
+            "court": _normalize_inline_text(rec.get("_source_court", "")),
+            "duties": _normalize_inline_text(rec.get("_source_duties", "")),
+            "end_date": _normalize_inline_text(rec.get("_source_end_date", "")),
+            "work_place": _normalize_inline_text(rec.get("_source_work_place", "")),
+            "phone": _normalize_inline_text(rec.get("_source_phone", "")),
+            "links": _normalize_inline_text(rec.get("_source_links", "")),
+            "features": _normalize_inline_text(rec.get("_source_features", "")),
+            "season_clothes": _normalize_inline_text(rec.get("_source_season_clothes", "")),
+            "violations": _normalize_inline_text(rec.get("_source_violations", "")),
+            "ic_check": _normalize_inline_text(rec.get("_source_ic_check", "")),
+        }
+        existing_doc_overrides = db.all_person_doc_overrides().get((key_fio, key_dob), {})
+        doc_overrides = dict(existing_doc_overrides) if isinstance(existing_doc_overrides, dict) else {}
+        changed = set(changed_fields)
+
+        def touch_override(changed_label: str, doc_key: str, new_value: str, source_value: str):
+            if changed_label not in changed:
+                return
+            if _normalize_inline_text(new_value) == _normalize_inline_text(source_value):
+                doc_overrides.pop(doc_key, None)
+            else:
+                doc_overrides[doc_key] = _normalize_inline_text(new_value)
+
+        touch_override("Дата рождения", "dob", new_data.get("Дата рождения", ""), source["dob"])
+        touch_override("Суд (когда, кем)", "court", new_data.get("Суд (когда, кем)", ""), source["court"])
+        touch_override("Обязанности", "duties", new_data.get("Обязанности", ""), source["duties"])
+        touch_override("Окончание срока", "end_date", new_data.get("Окончание срока", ""), source["end_date"])
+        touch_override("Место работы (учебы)", "work_place", new_data.get("Место работы (учебы)", ""), source["work_place"])
+        touch_override("Телефон", "phone", new_data.get("Телефон", ""), source["phone"])
+        touch_override("Связи", "links", new_data.get("Связи", ""), source["links"])
+        touch_override("Приметы", "features", new_data.get("Приметы", ""), source["features"])
+        touch_override("Сезонная одежда", "season_clothes", new_data.get("Сезонная одежда", ""), source["season_clothes"])
+        touch_override("Нарушения", "violations", new_data.get("Нарушения", ""), source["violations"])
+        touch_override("Проверка ИЦ", "ic_check", new_data.get("Проверка ИЦ", ""), source["ic_check"])
+
+        db.set_person_doc_overrides(key_fio, key_dob, doc_overrides)
+
+        key = (key_fio, key_dob)
+        affected_rows = []
+        for idx, item_rec in enumerate(self._records):
+            if self._record_source_key(item_rec) != key:
+                continue
+            item_rec["ФИО"] = new_data.get("ФИО", "")
+            item_rec["Дата рождения"] = new_data.get("Дата рождения", "")
+            item_rec["Место жительства"] = new_data.get("Место жительства", "")
+            item_rec["Суд (когда, кем)"] = new_data.get("Суд (когда, кем)", "")
+            item_rec["Обязанности"] = new_data.get("Обязанности", "")
+            item_rec["Окончание срока"] = new_data.get("Окончание срока", "")
+            item_rec["Место работы (учебы)"] = new_data.get("Место работы (учебы)", "")
+            item_rec["Телефон"] = new_data.get("Телефон", "")
+            item_rec["Связи"] = new_data.get("Связи", "")
+            item_rec["Приметы"] = new_data.get("Приметы", "")
+            item_rec["Сезонная одежда"] = new_data.get("Сезонная одежда", "")
+            item_rec["Нарушения"] = new_data.get("Нарушения", "")
+            item_rec["Проверка ИЦ"] = new_data.get("Проверка ИЦ", "")
+            affected_rows.append(idx)
+
+            fio_item = self._table.item(idx, self.C_FIO)
+            if fio_item is not None:
+                fio_item.setText(item_rec["ФИО"] or "—")
+            dob_item = self._table.item(idx, self.C_DOB)
+            if dob_item is not None:
+                dob_item.setText(item_rec["Дата рождения"] or "—")
+
+        new_char_text = _normalize_inline_text(new_data.get("Характеристика", ""))
+        char_or_links_changed = ("Характеристика" in changed) or ("Связи" in changed)
+        if char_or_links_changed:
+            effective_custom = new_char_text or old_char_text or _default_template_for("нейтральная")
+            for r_idx in affected_rows or [row]:
+                self._set_row_char_type(r_idx, CUSTOM_CHAR_OPTION, effective_custom, persist=True)
+                if 0 <= r_idx < len(self._records):
+                    self._records[r_idx]["Характеристика"] = effective_custom
+        else:
+            for r_idx in affected_rows or [row]:
+                if 0 <= r_idx < len(self._records):
+                    self._records[r_idx]["Характеристика"] = new_char_text
+
+        if old_data.get("Место жительства", "") != new_data.get("Место жительства", ""):
+            self._auto_assign(rows=affected_rows or [row], update_status=False, confirm_changes=False)
+
+        self._apply_officer_filter()
+        self._refresh_unmatched_info()
+        _set_status(self._status, f"Карточка обновлена: {new_data.get('ФИО', '—')}", "ok")
+
+    def _edit_row_fio(self, row: int):
+        if self._is_edit_locked():
+            self._warn_edit_locked()
+            return
+        if row < 0 or row >= len(self._records):
+            return
+        rec = self._records[row]
+        src_fio, src_dob = self._record_source_key(rec)
+        old_fio = str(rec.get('ФИО', '') or '').strip()
+        if not old_fio and not src_fio:
+            return
+
+        new_fio, ok = QInputDialog.getText(
+            self,
+            "Изменение ФИО",
+            "Введите ФИО:",
+            QLineEdit.EchoMode.Normal,
+            old_fio or src_fio,
+        )
+        if not ok:
+            return
+        new_fio = " ".join((new_fio or "").split()).strip()
+        if not new_fio:
+            QMessageBox.warning(self, "Пустое ФИО", "ФИО не может быть пустым.")
+            return
+        if new_fio == (old_fio or src_fio):
+            return
+
+        r = QMessageBox.question(
+            self,
+            "Подтверждение изменения ФИО",
+            (
+                f"Изменить ФИО в выбранной записи?\n\n"
+                f"Было: {old_fio}\n"
+                f"Станет: {new_fio}"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if r != QMessageBox.StandardButton.Yes:
+            return
+
+        db.set_person_fio_override(src_fio, src_dob, new_fio)
+        old_key = (src_fio, src_dob)
+        for idx, r in enumerate(self._records):
+            if self._record_source_key(r) != old_key:
+                continue
+            r['ФИО'] = new_fio
+            fio_item = self._table.item(idx, self.C_FIO)
+            if fio_item is not None:
+                fio_item.setText(new_fio)
+        self._apply_officer_filter()
+        self._refresh_unmatched_info()
+
+    def _edit_row_address(self, row: int):
+        if self._is_edit_locked():
+            self._warn_edit_locked()
+            return
+        if row < 0 or row >= len(self._records):
+            return
+        rec = self._records[row]
+        fio = str(rec.get('ФИО', '') or '').strip()
+        key_fio, key_dob = self._record_source_key(rec)
+        old_addr = _normalize_person_address(rec.get('Место жительства', '') or '')
+
+        new_addr, ok = QInputDialog.getMultiLineText(
+            self,
+            "Изменение адреса",
+            f"Изменить адрес для:\n{fio or '—'}",
+            old_addr,
+        )
+        if not ok:
+            return
+        new_addr = _normalize_person_address(new_addr or "")
+        if new_addr == old_addr:
+            return
+        if not new_addr:
+            QMessageBox.warning(self, "Пустой адрес", "Адрес не может быть пустым.")
+            return
+
+        old_view = old_addr if old_addr else "—"
+        new_view = new_addr if new_addr else "—"
+        msg = (
+            "Применить изменение адреса?\n\n"
+            f"Было:\n{old_view}\n\n"
+            f"Станет:\n{new_view}"
+        )
+        r = QMessageBox.question(
+            self,
+            "Подтверждение изменения адреса",
+            msg,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if r != QMessageBox.StandardButton.Yes:
+            return
+
+        key = (key_fio, key_dob)
+        affected_rows = []
+        for r in self._records:
+            if self._record_source_key(r) == key:
+                r['Место жительства'] = new_addr
+        for idx, r in enumerate(self._records):
+            if self._record_source_key(r) == key:
+                affected_rows.append(idx)
+        db.set_person_address_fix(key_fio, key_dob, new_addr)
+        self._auto_assign(rows=affected_rows or [row], update_status=False, confirm_changes=False)
+        self._apply_officer_filter()
+        self._refresh_unmatched_info()
 
     def _on_row_char_checkbox_changed(self, item: QTableWidgetItem):
         if self._char_syncing or self._is_edit_locked():
@@ -1286,11 +2143,68 @@ class ObzorkiTab(QWidget):
 
         threading.Thread(target=task, daemon=True).start()
 
+    def _record_source_key(self, rec: dict):
+        if not isinstance(rec, dict):
+            return "", ""
+        fio = str(rec.get('_source_fio', rec.get('ФИО', '')) or '').strip()
+        dob = str(rec.get('_source_dob', rec.get('Дата рождения', '')) or '').strip()
+        return fio, dob
+
+    def _prepare_records_identity(self):
+        if not self._records:
+            return
+        for rec in self._records:
+            if not isinstance(rec, dict):
+                continue
+            rec.setdefault('Место работы (учебы)', '')
+            rec.setdefault('Телефон', '')
+            rec.setdefault('Связи', rec.get('Связи (п.9)', ''))
+            rec.setdefault('Приметы', rec.get('Приметы (п.10)', g.FEATURES_TEXT))
+            rec.setdefault('Сезонная одежда', rec.get('Сезонная одежда (п.11)', g.SEASON_CLOTHES_TEXT))
+            rec.setdefault('Нарушения', rec.get('Нарушения (п.12)', ''))
+            rec.setdefault('Проверка ИЦ', rec.get('Проверка ИЦ (п.13)', getattr(g, "IC_CHECK_TEXT", "См. справку ИБД-Р")))
+            src_fio = str(rec.get('ФИО', '') or '').strip()
+            src_dob = str(rec.get('Дата рождения', '') or '').strip()
+            rec['_source_fio'] = src_fio
+            rec['_source_dob'] = src_dob
+            rec['_source_court'] = _normalize_inline_text(rec.get('Суд (когда, кем)', ''))
+            rec['_source_duties'] = _normalize_inline_text(rec.get('Обязанности', ''))
+            rec['_source_end_date'] = _normalize_inline_text(rec.get('Окончание срока', ''))
+            rec['_source_work_place'] = _normalize_inline_text(rec.get('Место работы (учебы)', ''))
+            rec['_source_phone'] = _normalize_inline_text(rec.get('Телефон', ''))
+            rec['_source_links'] = _normalize_inline_text(rec.get('Связи', rec.get('Связи (п.9)', '')))
+            rec['_source_features'] = _normalize_inline_text(rec.get('Приметы', rec.get('Приметы (п.10)', g.FEATURES_TEXT)))
+            rec['_source_season_clothes'] = _normalize_inline_text(
+                rec.get('Сезонная одежда', rec.get('Сезонная одежда (п.11)', g.SEASON_CLOTHES_TEXT))
+            )
+            rec['_source_violations'] = _normalize_inline_text(rec.get('Нарушения', rec.get('Нарушения (п.12)', '')))
+            rec['_source_ic_check'] = _normalize_inline_text(
+                rec.get('Проверка ИЦ', rec.get('Проверка ИЦ (п.13)', getattr(g, "IC_CHECK_TEXT", "См. справку ИБД-Р")))
+            )
+
+    def _normalize_record_addresses(self):
+        if not self._records:
+            return
+        for rec in self._records:
+            if isinstance(rec, dict):
+                rec['Место жительства'] = _normalize_person_address(
+                    rec.get('Место жительства', '')
+                )
+
+    def _apply_saved_fio_overrides(self):
+        overrides = db.all_person_fio_overrides()
+        if not overrides or not self._records:
+            return
+        for rec in self._records:
+            src_fio, src_dob = self._record_source_key(rec)
+            fio_override = (overrides.get((src_fio, src_dob)) or '').strip()
+            if fio_override:
+                rec['ФИО'] = fio_override
+
     def _current_record_keys(self) -> set:
         keys = set()
         for rec in self._records:
-            fio = str(rec.get('ФИО', '')).strip()
-            dob = str(rec.get('Дата рождения', '')).strip()
+            fio, dob = self._record_source_key(rec)
             if fio:
                 keys.add((fio, dob))
         return keys
@@ -1300,11 +2214,42 @@ class ObzorkiTab(QWidget):
         if not fixes or not self._records:
             return
         for rec in self._records:
-            fio = str(rec.get('ФИО', '')).strip()
-            dob = str(rec.get('Дата рождения', '')).strip()
+            fio, dob = self._record_source_key(rec)
             fixed = fixes.get((fio, dob))
             if fixed:
-                rec['Место жительства'] = fixed
+                rec['Место жительства'] = _normalize_person_address(fixed)
+
+    def _apply_saved_doc_overrides(self):
+        overrides = db.all_person_doc_overrides()
+        if not overrides or not self._records:
+            return
+        for rec in self._records:
+            fio, dob = self._record_source_key(rec)
+            data = overrides.get((fio, dob))
+            if not isinstance(data, dict):
+                continue
+            if 'dob' in data:
+                rec['Дата рождения'] = _normalize_inline_text(data.get('dob', ''))
+            if 'court' in data:
+                rec['Суд (когда, кем)'] = _normalize_inline_text(data.get('court', ''))
+            if 'duties' in data:
+                rec['Обязанности'] = _normalize_inline_text(data.get('duties', ''))
+            if 'end_date' in data:
+                rec['Окончание срока'] = _normalize_inline_text(data.get('end_date', ''))
+            if 'work_place' in data:
+                rec['Место работы (учебы)'] = _normalize_inline_text(data.get('work_place', ''))
+            if 'phone' in data:
+                rec['Телефон'] = _normalize_inline_text(data.get('phone', ''))
+            if 'links' in data:
+                rec['Связи'] = _normalize_inline_text(data.get('links', ''))
+            if 'features' in data:
+                rec['Приметы'] = _normalize_inline_text(data.get('features', ''))
+            if 'season_clothes' in data:
+                rec['Сезонная одежда'] = _normalize_inline_text(data.get('season_clothes', ''))
+            if 'violations' in data:
+                rec['Нарушения'] = _normalize_inline_text(data.get('violations', ''))
+            if 'ic_check' in data:
+                rec['Проверка ИЦ'] = _normalize_inline_text(data.get('ic_check', ''))
 
     def _cleanup_missing_saved_characteristics(self):
         current_keys = self._current_record_keys()
@@ -1344,7 +2289,11 @@ class ObzorkiTab(QWidget):
             self._save_ui_settings()
         self._pending_load_path = ""
         self._records = records or []
+        self._normalize_record_addresses()
+        self._prepare_records_identity()
+        self._apply_saved_fio_overrides()
         self._apply_saved_address_fixes()
+        self._apply_saved_doc_overrides()
         self._cleanup_missing_saved_characteristics()
         self._populate_table()
         _set_status(self._status, "Список загружен", "ok")
@@ -1374,6 +2323,7 @@ class ObzorkiTab(QWidget):
         for i, rec in enumerate(self._records):
             fio_val = rec.get('ФИО', '')
             dob_val = rec.get('Дата рождения', '')
+            key_fio, key_dob = self._record_source_key(rec)
 
             chk = QTableWidgetItem()
             chk.setCheckState(Qt.CheckState.Checked)
@@ -1390,6 +2340,11 @@ class ObzorkiTab(QWidget):
             fio_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
             self._table.setItem(i, self.C_FIO, fio_item)
 
+            dob_item = QTableWidgetItem(dob_val or '—')
+            dob_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            dob_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._table.setItem(i, self.C_DOB, dob_item)
+
             cat_full  = rec.get('Категория', '')
             cat_short = CAT_SHORT.get(cat_full, cat_full[:8])
             cat_item  = QTableWidgetItem(cat_short)
@@ -1398,7 +2353,7 @@ class ObzorkiTab(QWidget):
             cat_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self._table.setItem(i, self.C_CAT, cat_item)
 
-            pref = char_prefs.get((fio_val, dob_val))
+            pref = char_prefs.get((key_fio, key_dob))
             pref_type = (pref.get('char_type', '') if isinstance(pref, dict) else '').strip()
             pref_custom = (pref.get('custom_text', '') if isinstance(pref, dict) else '').strip()
             if pref_type not in ("положительная", "нейтральная", "отрицательная", CUSTOM_CHAR_OPTION):
@@ -1418,7 +2373,7 @@ class ObzorkiTab(QWidget):
             off_cb.setFixedHeight(24)
 
             # Ручное назначение имеет приоритет над авто
-            assigned_id = assignments.get((fio_val, dob_val))
+            assigned_id = assignments.get((key_fio, key_dob))
             if assigned_id is not None and assigned_id in officers_by_id:
                 label = g._officer_label(officers_by_id[assigned_id])
                 if label in self._off_labels:
@@ -1433,6 +2388,12 @@ class ObzorkiTab(QWidget):
             off_cb.setProperty('prev_off_label', off_cb.currentText())
             self._table.setCellWidget(i, self.C_OFF, off_cb)
             off_cb.currentTextChanged.connect(lambda _t, _r=i: self._on_row_officer_changed(_r))
+
+            addr_btn = _flat_btn("Адрес...", 78)
+            addr_btn.setFixedHeight(24)
+            addr_btn.setToolTip("Изменить адрес в этой записи")
+            addr_btn.clicked.connect(lambda _=False, _r=i: self._edit_row_address(_r))
+            self._table.setCellWidget(i, self.C_ADDR, addr_btn)
 
         self._table.blockSignals(False)
         self._char_syncing = False
@@ -1516,7 +2477,7 @@ class ObzorkiTab(QWidget):
         if row < 0 or row >= len(self._records):
             return "", ""
         rec = self._records[row]
-        return (str(rec.get('ФИО', '')).strip(), str(rec.get('Дата рождения', '')).strip())
+        return self._record_source_key(rec)
 
     def _char_cols(self) -> tuple:
         return (self.C_CHAR_POS, self.C_CHAR_NEU, self.C_CHAR_NEG, self.C_CHAR_CUS)
@@ -1683,10 +2644,50 @@ class ObzorkiTab(QWidget):
         label = (self._bulk_officer_cb.currentText() or "").strip()
         if not label or label == BULK_OFFICER_PLACEHOLDER:
             return
+
+        target_rows = self._target_rows_for_mass_action()
+        changes = []
+        for row in target_rows:
+            cb = self._table.cellWidget(row, self.C_OFF)
+            if not isinstance(cb, QComboBox):
+                continue
+            if (cb.currentText() or "").strip() == label:
+                continue
+            changes.append(row)
+
+        if not changes:
+            self._bulk_officer_updating = True
+            self._bulk_officer_cb.setCurrentText(BULK_OFFICER_PLACEHOLDER)
+            self._bulk_officer_updating = False
+            return
+
+        preview = []
+        for row in changes[:8]:
+            fio = str(self._records[row].get('ФИО', '') or '-')
+            preview.append(f"- {fio}")
+        more = "" if len(changes) <= 8 else f"\n... и ещё {len(changes) - 8}"
+        msg = (
+            f"Назначить «{label}» для {len(changes)} записей?\n\n"
+            f"{chr(10).join(preview)}{more}\n\n"
+            "Продолжить?"
+        )
+        r = QMessageBox.question(
+            self,
+            "Подтверждение назначения участкового",
+            msg,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if r != QMessageBox.StandardButton.Yes:
+            self._bulk_officer_updating = True
+            self._bulk_officer_cb.setCurrentText(BULK_OFFICER_PLACEHOLDER)
+            self._bulk_officer_updating = False
+            _set_status(self._status, "Массовое назначение участкового отменено", "info")
+            return
+
         changed = 0
         self._bulk_assigning = True
         try:
-            for row in self._target_rows_for_mass_action():
+            for row in changes:
                 cb = self._table.cellWidget(row, self.C_OFF)
                 if not isinstance(cb, QComboBox):
                     continue
@@ -1795,7 +2796,7 @@ class ObzorkiTab(QWidget):
             new_addresses = dlg.get_addresses()
             for idx, row in enumerate(rows):
                 if idx < len(new_addresses):
-                    addr = (new_addresses[idx] or "").strip()
+                    addr = _normalize_person_address(new_addresses[idx] or "")
                     if addr:
                         self._records[row]['Место жительства'] = addr
                         fio, dob = self._person_key_for_row(row)
@@ -1831,6 +2832,26 @@ class ObzorkiTab(QWidget):
         self._save_ui_settings()
         quarter = self._quarter.value()
         year    = self._year.value()
+        base_char_templates = _norm_char_templates(g.CHAR_TEXTS)
+        officer_char_overrides = _norm_officer_char_templates(db.all_officer_char_templates())
+        char_templates_cache = {}
+
+        def templates_for_officer(officer_obj: dict) -> dict:
+            if not isinstance(officer_obj, dict):
+                return base_char_templates
+            try:
+                off_id = int(officer_obj.get('id'))
+            except Exception:
+                return base_char_templates
+            cached = char_templates_cache.get(off_id)
+            if cached is not None:
+                return cached
+            merged = _effective_char_templates(
+                base_char_templates,
+                officer_char_overrides.get(off_id),
+            )
+            char_templates_cache[off_id] = merged
+            return merged
 
         selected = []
         for row, rec in enumerate(self._records):
@@ -1841,7 +2862,7 @@ class ObzorkiTab(QWidget):
                 char, custom_char = self._char_type_for_row(row)
                 off_lbl = off_cb.currentText()  if isinstance(off_cb,  QComboBox) else NO_OFFICER
                 officer = self._resolve_generation_officer(self._off_map.get(off_lbl))
-                selected.append((rec, char, officer, custom_char))
+                selected.append((rec, char, officer, custom_char, templates_for_officer(officer)))
 
         if not selected:
             QMessageBox.warning(self, "Нет выбранных", "Не выбрано ни одной записи.")
@@ -1863,11 +2884,20 @@ class ObzorkiTab(QWidget):
         def task():
             errors  = []
             created = 0
-            for n, (rec, char_type, officer, custom_char) in enumerate(selected, 1):
+            for n, (rec, char_type, officer, custom_char, char_templates) in enumerate(selected, 1):
                 try:
                     folder  = g._officer_folder(officer) if officer else 'Без_участкового'
                     out_dir = os.path.join(BASE_OUT_DIR, f'{year}_Q{quarter}', folder)
-                    g.generate_one(rec, char_type, quarter, year, out_dir, officer, custom_char_text=custom_char)
+                    g.generate_one(
+                        rec,
+                        char_type,
+                        quarter,
+                        year,
+                        out_dir,
+                        officer,
+                        custom_char_text=custom_char,
+                        char_templates=char_templates,
+                    )
                     created += 1
                 except Exception as exc:
                     errors.append(f"  {rec.get('ФИО', '?')}: {exc}")
@@ -1925,6 +2955,8 @@ class OfficersTab(QWidget):
         self._on_dislocation_loaded = None   # callback → UnmatchedTab.refresh
         self._on_officers_changed = None
         self._dis_load_in_progress = False
+        self._suspend_off_table_item_handler = False
+        self._suspend_officer_combo_handlers = False
         self._build()
         self._reload_from_db()
 
@@ -1975,6 +3007,16 @@ class OfficersTab(QWidget):
         self._off_table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         # Отключаем системную подсветку selected-item, чтобы не было "синей полосы" выше строки.
         self._off_table.setStyleSheet(
+            "QTableView {"
+            "  background: palette(base);"
+            "  alternate-background-color: palette(alternate-base);"
+            "  color: palette(text);"
+            "  gridline-color: #3a3a3a;"
+            "}"
+            "QHeaderView::section {"
+            "  background: palette(button);"
+            "  color: palette(button-text);"
+            "}"
             "QTableView::item:selected {"
             "  background: transparent;"
             "  color: palette(text);"
@@ -2035,6 +3077,7 @@ class OfficersTab(QWidget):
                 (self.C_FIO,  'fio'),
             ):
                 it = QTableWidgetItem(str(o.get(key, '')))
+                it.setData(Qt.ItemDataRole.UserRole, str(o.get(key, '')))
                 it.setFlags(
                     Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
                     | Qt.ItemFlag.ItemIsEditable)
@@ -2055,8 +3098,14 @@ class OfficersTab(QWidget):
             rank_cb.blockSignals(True)
             rank_cb.setCurrentText(_std_rank(o.get('rank', '')))
             rank_cb.blockSignals(False)
-            rank_cb.currentTextChanged.connect(
-                lambda val, _oid=oid, _r=i: self._on_rank_changed(_oid, _r, val))
+            rank_cb.setProperty('prev_value', rank_cb.currentText())
+            rank_cb.activated.connect(
+                lambda _idx, _oid=oid, _r=i, _cb=rank_cb: self._on_rank_changed(_oid, _r, _cb.currentText())
+            )
+            if rank_cb.lineEdit() is not None:
+                rank_cb.lineEdit().editingFinished.connect(
+                    lambda _oid=oid, _r=i, _cb=rank_cb: self._on_rank_changed(_oid, _r, _cb.currentText())
+                )
             self._off_table.setCellWidget(i, self.C_RANK, rank_cb)
 
             # C_POS: комбобокс должности + свободный ввод
@@ -2067,8 +3116,14 @@ class OfficersTab(QWidget):
             pos_cb.blockSignals(True)
             pos_cb.setCurrentText(_std_pos(o.get('position', '')))
             pos_cb.blockSignals(False)
-            pos_cb.currentTextChanged.connect(
-                lambda val, _oid=oid, _r=i: self._on_position_changed(_oid, _r, val))
+            pos_cb.setProperty('prev_value', pos_cb.currentText())
+            pos_cb.activated.connect(
+                lambda _idx, _oid=oid, _r=i, _cb=pos_cb: self._on_position_changed(_oid, _r, _cb.currentText())
+            )
+            if pos_cb.lineEdit() is not None:
+                pos_cb.lineEdit().editingFinished.connect(
+                    lambda _oid=oid, _r=i, _cb=pos_cb: self._on_position_changed(_oid, _r, _cb.currentText())
+                )
             self._off_table.setCellWidget(i, self.C_POS, pos_cb)
 
             # C_ADDR: кнопка открытия адресов
@@ -2098,8 +3153,9 @@ class OfficersTab(QWidget):
             else:
                 repl_cb.setCurrentIndex(0)
             repl_cb.blockSignals(False)
+            repl_cb.setProperty('prev_repl_id', repl_cb.currentData())
             repl_cb.currentIndexChanged.connect(
-                lambda _idx, _oid=o.get('id'), _cb=repl_cb: self._on_replacement_changed(_oid, _cb)
+                lambda _idx, _oid=o.get('id'), _cb=repl_cb, _r=i: self._on_replacement_changed(_oid, _cb, _r)
             )
             self._off_table.setCellWidget(i, self.C_REPL, repl_cb)
 
@@ -2151,7 +3207,41 @@ class OfficersTab(QWidget):
 
     # ── Обработчики изменений в таблице ──────────────────────────────────────
 
+    def _confirm_officer_change(
+        self,
+        title: str,
+        officer: dict,
+        field_label: str,
+        old_value: str,
+        new_value: str,
+    ) -> bool:
+        fio = str((officer or {}).get('fio', '') or '—')
+        district = str((officer or {}).get('district', '') or '—')
+        old_v = old_value if str(old_value).strip() else "—"
+        new_v = new_value if str(new_value).strip() else "—"
+        r = QMessageBox.question(
+            self,
+            title,
+            (
+                f"Подтвердите изменение:\n"
+                f"{fio} (участок {district})\n\n"
+                f"{field_label}: {old_v} → {new_v}"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        return r == QMessageBox.StandardButton.Yes
+
+    def _repl_label(self, cb: QComboBox, repl_id) -> str:
+        if not isinstance(cb, QComboBox) or repl_id is None:
+            return "—"
+        idx = cb.findData(repl_id)
+        if idx < 0:
+            return "—"
+        return cb.itemText(idx) or "—"
+
     def _on_table_item_changed(self, item: QTableWidgetItem):
+        if self._suspend_off_table_item_handler:
+            return
         row = item.row()
         if row < 0 or row >= len(self._officers):
             return
@@ -2159,39 +3249,152 @@ class OfficersTab(QWidget):
         col     = item.column()
 
         if col == self.C_DIST:
+            old_val = str(item.data(Qt.ItemDataRole.UserRole) or "").strip()
             new_val = item.text().strip()
+            if new_val == old_val:
+                return
+            if not self._confirm_officer_change(
+                "Подтверждение изменения участка",
+                officer,
+                "Участок",
+                old_val,
+                new_val,
+            ):
+                self._suspend_off_table_item_handler = True
+                item.setText(old_val)
+                self._suspend_off_table_item_handler = False
+                return
             db.update_officer_field(officer['id'], 'district', new_val)
             officer['district'] = new_val
+            item.setData(Qt.ItemDataRole.UserRole, new_val)
             self._notify_officers_changed()
 
         elif col == self.C_FIO:
+            old_val = str(item.data(Qt.ItemDataRole.UserRole) or "").strip()
             new_val = item.text().strip()
+            if new_val == old_val:
+                return
+            if not new_val:
+                QMessageBox.warning(self, "Пустое ФИО", "ФИО не может быть пустым.")
+                self._suspend_off_table_item_handler = True
+                item.setText(old_val)
+                self._suspend_off_table_item_handler = False
+                return
+            if not self._confirm_officer_change(
+                "Подтверждение изменения ФИО",
+                officer,
+                "ФИО",
+                old_val,
+                new_val,
+            ):
+                self._suspend_off_table_item_handler = True
+                item.setText(old_val)
+                self._suspend_off_table_item_handler = False
+                return
             db.update_officer_field(officer['id'], 'fio', new_val)
             officer['fio'] = new_val
+            item.setData(Qt.ItemDataRole.UserRole, new_val)
             self._notify_officers_changed()
 
     def _on_rank_changed(self, officer_id: int, row: int, value: str):
-        if row < len(self._officers):
-            db.update_officer_field(officer_id, 'rank', value)
-            self._officers[row]['rank'] = value
-            self._notify_officers_changed(refresh_unmatched=False)
-
-    def _on_position_changed(self, officer_id: int, row: int, value: str):
-        if row < len(self._officers):
-            db.update_officer_field(officer_id, 'position', value)
-            self._officers[row]['position'] = value
-            self._notify_officers_changed(refresh_unmatched=False)
-
-    def _on_replacement_changed(self, officer_id: int, cb: QComboBox):
+        if self._suspend_officer_combo_handlers or row < 0 or row >= len(self._officers):
+            return
+        cb = self._off_table.cellWidget(row, self.C_RANK)
         if not isinstance(cb, QComboBox):
             return
+        old_val = str(cb.property('prev_value') or "").strip()
+        new_val = str(value or "").strip()
+        if not new_val:
+            self._suspend_officer_combo_handlers = True
+            cb.setCurrentText(old_val)
+            self._suspend_officer_combo_handlers = False
+            return
+        if new_val == old_val:
+            return
+        officer = self._officers[row]
+        if not self._confirm_officer_change(
+            "Подтверждение изменения звания",
+            officer,
+            "Звание",
+            old_val,
+            new_val,
+        ):
+            self._suspend_officer_combo_handlers = True
+            cb.setCurrentText(old_val)
+            self._suspend_officer_combo_handlers = False
+            return
+        db.update_officer_field(officer_id, 'rank', new_val)
+        self._officers[row]['rank'] = new_val
+        cb.setProperty('prev_value', new_val)
+        self._notify_officers_changed(refresh_unmatched=False)
+
+    def _on_position_changed(self, officer_id: int, row: int, value: str):
+        if self._suspend_officer_combo_handlers or row < 0 or row >= len(self._officers):
+            return
+        cb = self._off_table.cellWidget(row, self.C_POS)
+        if not isinstance(cb, QComboBox):
+            return
+        old_val = str(cb.property('prev_value') or "").strip()
+        new_val = str(value or "").strip()
+        if not new_val:
+            self._suspend_officer_combo_handlers = True
+            cb.setCurrentText(old_val)
+            self._suspend_officer_combo_handlers = False
+            return
+        if new_val == old_val:
+            return
+        officer = self._officers[row]
+        if not self._confirm_officer_change(
+            "Подтверждение изменения должности",
+            officer,
+            "Должность",
+            old_val,
+            new_val,
+        ):
+            self._suspend_officer_combo_handlers = True
+            cb.setCurrentText(old_val)
+            self._suspend_officer_combo_handlers = False
+            return
+        db.update_officer_field(officer_id, 'position', new_val)
+        self._officers[row]['position'] = new_val
+        cb.setProperty('prev_value', new_val)
+        self._notify_officers_changed(refresh_unmatched=False)
+
+    def _on_replacement_changed(self, officer_id: int, cb: QComboBox, row: int = None):
+        if self._suspend_officer_combo_handlers or not isinstance(cb, QComboBox):
+            return
+        if row is None or row < 0 or row >= len(self._officers):
+            row = next((idx for idx, o in enumerate(self._officers) if o.get('id') == officer_id), -1)
+        if row < 0 or row >= len(self._officers):
+            return
+        officer = self._officers[row]
+        old_repl_id = cb.property('prev_repl_id')
         repl_id = cb.currentData()
+
+        old_lbl = self._repl_label(cb, old_repl_id)
+        new_lbl = self._repl_label(cb, repl_id)
+        if old_lbl == new_lbl:
+            return
+        if not self._confirm_officer_change(
+            "Подтверждение изменения замещения",
+            officer,
+            "Замещает",
+            old_lbl,
+            new_lbl,
+        ):
+            self._suspend_officer_combo_handlers = True
+            idx_old = cb.findData(old_repl_id)
+            cb.setCurrentIndex(idx_old if idx_old >= 0 else 0)
+            self._suspend_officer_combo_handlers = False
+            return
+
         if repl_id is None:
             self._replacements.pop(officer_id, None)
             db.set_officer_replacement(officer_id, None)
         else:
             self._replacements[officer_id] = int(repl_id)
             db.set_officer_replacement(officer_id, int(repl_id))
+        cb.setProperty('prev_repl_id', repl_id)
         self._notify_officers_changed(refresh_unmatched=False)
 
     # ── Адреса участкового ────────────────────────────────────────────────────
@@ -2204,7 +3407,31 @@ class OfficersTab(QWidget):
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
 
-        new_addrs = dlg.get_text()
+        old_addrs = str(officer.get('addresses', '') or '').strip()
+        new_addrs = str(dlg.get_text() or '').strip()
+        if new_addrs == old_addrs:
+            return
+
+        old_preview = old_addrs.replace('\n', '; ')[:220] if old_addrs else "—"
+        new_preview = new_addrs.replace('\n', '; ')[:220] if new_addrs else "—"
+        if len(old_addrs) > 220:
+            old_preview += "..."
+        if len(new_addrs) > 220:
+            new_preview += "..."
+        fio = str(officer.get('fio', '') or '—')
+
+        r = QMessageBox.question(
+            self,
+            "Подтверждение изменения адресов",
+            (
+                f"Изменить адреса для:\n{fio}\n\n"
+                f"Было:\n{old_preview}\n\n"
+                f"Станет:\n{new_preview}"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if r != QMessageBox.StandardButton.Yes:
+            return
 
         # Проверка конфликтов: ищем других участковых, у которых есть
         # совпадение «улица + номер дома» из новых адресов
@@ -2313,26 +3540,28 @@ class UnmatchedTab(QWidget):
         for i, (rec, row_idx) in enumerate(unmatched):
             fio_val  = rec.get('ФИО', '')
             dob_val  = rec.get('Дата рождения', '')
-            addr_val = rec.get('Место жительства', '').replace('\n', ' ')
+            key_fio  = str(rec.get('_source_fio', fio_val) or '').strip()
+            key_dob  = str(rec.get('_source_dob', dob_val) or '').strip()
+            addr_val = _normalize_person_address(rec.get('Место жительства', ''))
 
             for col, val in ((0, fio_val), (1, dob_val), (2, addr_val)):
                 item = QTableWidgetItem(val)
                 item.setFlags(Qt.ItemFlag.ItemIsEnabled)
                 if col == 2:
-                    item.setToolTip(rec.get('Место жительства', ''))
+                    item.setToolTip(addr_val)
                 self._um_table.setItem(i, col, item)
 
             off_cb = QComboBox()
             off_cb.addItems(off_labels)
 
-            assigned_id = db.get_assignment(fio_val, dob_val)
+            assigned_id = db.get_assignment(key_fio, key_dob)
             if assigned_id and assigned_id in officers_by_id:
                 label = g._officer_label(officers_by_id[assigned_id])
                 if label in off_labels:
                     off_cb.setCurrentText(label)
 
-            off_cb.setProperty('record_fio', fio_val)
-            off_cb.setProperty('record_dob', dob_val)
+            off_cb.setProperty('record_fio', key_fio)
+            off_cb.setProperty('record_dob', key_dob)
             off_cb.setProperty('table_row',  row_idx)
             self._um_table.setCellWidget(i, 3, off_cb)
 
@@ -2377,7 +3606,7 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(860, 600)
 
         settings = _load_settings()
-        self._dark = settings.get('dark_theme', False)
+        self._dark = _to_bool(settings.get('dark_theme', False), False)
         self._char_templates = _get_char_templates(settings)
         _apply_char_templates(self._char_templates)
 
@@ -2398,11 +3627,23 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
     def _set_theme(self, dark: bool):
-        self._dark = dark
+        self._dark = bool(dark)
         app = QApplication.instance()
         if app is not None:
             app.setStyleSheet("")
             _apply_palette(app, self._dark)
+            # Win10/Qt6: локальные styleSheet иногда не пересчитывают palette(...) автоматически.
+            # Принудительно переустанавливаем стили и переполировываем виджеты.
+            for w in app.allWidgets():
+                ss = w.styleSheet()
+                if ss:
+                    w.setStyleSheet("")
+                    w.setStyleSheet(ss)
+                style = w.style()
+                if style is not None:
+                    style.unpolish(w)
+                    style.polish(w)
+                w.update()
         self._save_app_settings()
 
     def _save_app_settings(self):
@@ -2412,11 +3653,20 @@ class MainWindow(QMainWindow):
         _save_settings(s)
 
     def _open_settings(self):
-        dlg = _SettingsDialog(self._dark, self._char_templates, self)
+        officers = self.officers_tab.get_active_officers() if hasattr(self, "officers_tab") else []
+        officer_templates = db.all_officer_char_templates()
+        dlg = _SettingsDialog(
+            self._dark,
+            self._char_templates,
+            officers=officers,
+            officer_char_templates=officer_templates,
+            parent=self,
+        )
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
         self._char_templates = dlg.get_templates()
         _apply_char_templates(self._char_templates)
+        db.replace_officer_char_templates(dlg.get_officer_templates())
         self._set_theme(dlg.is_dark_theme())
 
 
@@ -2425,21 +3675,37 @@ class MainWindow(QMainWindow):
 def main():
     if sys.platform == "win32":
         os.system("chcp 65001 > nul")
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("AutoObzorki.App.3.1")
+        except Exception:
+            pass
 
     if hasattr(QApplication, "setHighDpiScaleFactorRoundingPolicy"):
         QApplication.setHighDpiScaleFactorRoundingPolicy(
             Qt.HighDpiScaleFactorRoundingPolicy.RoundPreferFloor
         )
     app = QApplication(sys.argv)
+    app_icon = _load_app_icon()
+    if app_icon is not None:
+        app.setWindowIcon(app_icon)
     app.setStyle("Fusion")
     app.setFont(QFont("Segoe UI", 9))
     settings = _load_settings()
     _apply_char_templates(_get_char_templates(settings))
     app.setStyleSheet("")
-    _apply_palette(app, settings.get('dark_theme', False))
+    _apply_palette(app, _to_bool(settings.get('dark_theme', False), False))
+
+    splash = _show_startup_splash(app, app_icon=app_icon)
+    started_at = pytime.monotonic()
 
     win = MainWindow()
+    if app_icon is not None:
+        win.setWindowIcon(app_icon)
+    _finish_startup_splash(app, splash, started_at, minimum_seconds=1.1)
     win.show()
+    splash.finish(win)
+    if hasattr(win, "obzorki_tab") and hasattr(win.obzorki_tab, "run_startup_autoload"):
+        QTimer.singleShot(0, win.obzorki_tab.run_startup_autoload)
     sys.exit(app.exec())
 
 

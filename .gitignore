@@ -9,6 +9,10 @@ settings.json
 # Build artifacts
 build/
 dist/
+build_*/
+dist_*/
+*_portable*.zip
+autoobzorki_preview.png
 AutoObzorki_portable.zip
 .claude/
 
